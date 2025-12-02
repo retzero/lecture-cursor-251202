@@ -765,3 +765,100 @@ spec:
 - Enterprise Webhook 설정 가이드
 
 
+
+
+
+## 생성된 파일 구조
+
+jit-runner-manager/
+├── README.md                              # 종합 운영 가이드
+├── requirements.txt                       # Python 의존성
+├── .env.example                          # 환경 변수 예시
+│
+├── app/                                   # Python 애플리케이션
+│   ├── __init__.py
+│   ├── config.py                         # 설정 관리
+│   ├── main.py                           # FastAPI 엔트리포인트
+│   ├── webhook_handler.py                # Webhook 처리
+│   ├── celery_app.py                     # Celery 설정
+│   ├── tasks.py                          # Runner 생성/정리 태스크
+│   ├── redis_client.py                   # Redis 상태 관리
+│   ├── github_client.py                  # GitHub API (JIT token)
+│   └── k8s_client.py                     # Kubernetes Pod 관리
+│
+├── k8s/                                   # Kubernetes 매니페스트
+│   ├── namespace.yaml                    # 네임스페이스 정의
+│   ├── runner-pod-template.yaml          # Runner Pod 템플릿 (참고용)
+│   └── rbac.yaml                         # RBAC 설정
+│
+├── helm/jit-runner-manager/              #  Helm Chart
+│   ├── Chart.yaml
+│   ├── values.yaml                       # 설정값 (수정 필요)
+│   └── templates/
+│       ├── _helpers.tpl
+│       ├── configmap.yaml
+│       ├── deployment.yaml               # Webhook Receiver
+│       ├── deployment-worker.yaml        # Celery Worker + Beat
+│       ├── service.yaml
+│       ├── ingress.yaml
+│       ├── serviceaccount.yaml
+│       ├── rbac.yaml
+│       └── namespace-runner.yaml
+│
+├── docker/
+│   ├── Dockerfile                        # 컨테이너 이미지
+│   └── docker-compose.yaml               # 로컬 개발용
+│
+└── docs/
+    └── enterprise-webhook-setup.md       # Enterprise Webhook 설정 가이드
+
+## 빠른 시작
+### 1. Secrets 생성
+
+```
+# GitHub PAT
+kubectl create secret generic github-credentials \
+  --namespace jit-runner-manager \
+  --from-literal=pat='YOUR_GITHUB_PAT'
+
+# Webhook Secret
+kubectl create secret generic webhook-secret \
+  --namespace jit-runner-manager \
+  --from-literal=secret='YOUR_WEBHOOK_SECRET'
+```
+
+### 2. Helm Chart 설치
+
+```
+# values.yaml 수정 (GHES URL, Ingress 등)
+vi helm/jit-runner-manager/values.yaml
+
+# 설치
+helm install jit-runner-manager ./helm/jit-runner-manager \
+  --namespace jit-runner-manager \
+  --create-namespace
+```
+
+### 3. Enterprise Webhook 설정
+
+```
+GitHub Enterprise Server에서 Enterprise 레벨 Webhook을 설정합니다:
+Payload URL: https://your-ingress/webhook
+Events: Workflow jobs
+Secret: 위에서 생성한 값과 동일
+자세한 내용은 docs/enterprise-webhook-setup.md를 참조하세요.
+```
+
+
+## 핵심 동작 원리
+
+단계 | 동작
+1 | Workflow 시작 → GitHub이 workflow_job.queued 이벤트 전송
+2 | FastAPI Webhook Receiver가 수신
+3 | Redis에서 Org별 실행 중인 Runner 수 확인 (< 10?)
+4 | Celery Worker가 GitHub API로 JIT Runner token 발급
+5 | Kubernetes에 Runner Pod (DinD) 생성
+6 | Workflow 완료 → workflow_job.completed 이벤트
+7 | Runner Pod 삭제 + Redis 카운터 감소
+
+이 아키텍처를 통해 1000개 Organization에서 Org별 10개 제한을 효율적으로 지원할 수 있습니다. Listener Pod 없이 Webhook 기반으로 동작하므로 리소스 오버헤드가 최소화됩니다.
